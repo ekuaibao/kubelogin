@@ -1,0 +1,20 @@
+language: go
+
+go:
+- 1.11.x
+
+before_install:
+- go get -v gopkg.in/yaml.v2
+
+script:
+- go build
+
+if: tag =~ ^\d+
+
+deploy:
+  provider: releases
+  api_key: ""
+  file: kubelogin
+  skip_cleanup: true
+  on:
+    tags: true
