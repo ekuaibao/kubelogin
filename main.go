@@ -14,7 +14,10 @@ import (
 	"strings"
 )
 
+const version = "0.1.4"
+
 func main() {
+	log.Printf("kubelogin version: %s\n", version)
 	// parse options
 	usr, err := user.Current()
 	if err != nil {
@@ -37,14 +40,6 @@ func main() {
 	flag.StringVar(&opts.username, "username", opts.username, "username")
 	flag.StringVar(&opts.password, "password", opts.password, "password")
 	flag.Parse()
-	if opts.domain == "" {
-		log.Fatalln("Parameter domain is required")
-		return
-	}
-	if opts.realm == "" {
-		log.Fatalln("Parameter realm is required")
-		return
-	}
 	if opts.username == "" {
 		log.Fatalln("Parameter username is required")
 		return
@@ -67,32 +62,55 @@ func main() {
 	}
 	body = convert(body)
 	root := body.(map[string]interface{})
-	clientId, clientSecret := readYamlClientIdAndSecret(root, opts.username)
-	if opts.clientId == "" {
-		if clientId == "" {
-			log.Fatalln("Parameter client-id is required")
-			return
-		}
-	} else {
-		clientId = opts.clientId
-	}
-	if opts.clientSecret == "" {
-		if clientSecret == "" {
-			log.Fatalln("Parameter client-secret is required")
-			return
-		}
-	} else {
-		clientSecret = opts.clientSecret
-	}
-	realmUrl := fmt.Sprintf("https://%s/auth/realms/%s", opts.domain, opts.realm)
-	loginUrl := fmt.Sprintf("%s/protocol/openid-connect/token", realmUrl)
-	resp, err := login(loginUrl, clientId, clientSecret, opts.username, opts.password)
+	uc := readUserConfig(root, opts.username)
+	// merge options with original kubeconfig
+	ku, err := parseKeycloakUrl(uc.idpIssuerUrl)
 	if err != nil {
 		log.Fatalln(err)
 		return
 	}
-	conf := makeYamlConfig(opts.username, clientId, clientSecret, realmUrl, resp.IdToken, resp.RefreshToken)
-	replaceYamlConfig(root, opts.username, conf)
+	if opts.domain != "" {
+		ku.domain = opts.domain
+	}
+	if ku.domain == "" {
+		log.Fatalln("Parameter domain is required")
+		return
+	}
+	if opts.realm != "" {
+		ku.realm = opts.realm
+	}
+	if ku.realm == "" {
+		log.Fatalln("Parameter realm is required")
+		return
+	}
+	realmUrl := fmt.Sprintf("https://%s/auth/realms/%s", ku.domain, ku.realm)
+	if opts.clientId != "" {
+		uc.clientId = opts.clientId
+	}
+	if uc.clientId == "" {
+		log.Fatalln("Parameter client-id is required")
+		return
+	}
+	if opts.clientSecret != "" {
+		uc.clientSecret = opts.clientSecret
+	}
+	if uc.clientSecret == "" {
+		log.Fatalln("Parameter client-secret is required")
+		return
+	}
+	// login
+	loginUrl := fmt.Sprintf("%s/protocol/openid-connect/token", realmUrl)
+	resp, err := login(loginUrl, uc.clientId, uc.clientSecret, uc.username, opts.password)
+	if err != nil {
+		log.Fatalln(err)
+		return
+	}
+	// update kubeconfig
+	uc.idpIssuerUrl = realmUrl
+	uc.idToken = resp.IdToken
+	uc.refreshToken = resp.RefreshToken
+	updateYamlConfig(root, uc)
+	// save files
 	data, err = yaml.Marshal(root)
 	if err != nil {
 		log.Fatalln(err)
@@ -104,6 +122,7 @@ func main() {
 		return
 	}
 	fmt.Printf("Write to %s\n", opts.config)
+	// done
 	fmt.Println("Login success.")
 }
 
@@ -123,9 +142,6 @@ func login(uri string, clientId string, clientSecret string, username string, pa
 	if err != nil {
 		return ret, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return ret, fmt.Errorf("fail to request login api: %s", resp.Status)
-	}
 	buf, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return ret, err
@@ -134,6 +150,10 @@ func login(uri string, clientId string, clientSecret string, username string, pa
 	if err != nil {
 		return ret, err
 	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		text := string(buf)
+		return ret, fmt.Errorf("fail to request login api: %s : %s", resp.Status, text)
+	}
 	err = json.Unmarshal(buf, &ret)
 	if err != nil {
 		return ret, err
@@ -141,33 +161,52 @@ func login(uri string, clientId string, clientSecret string, username string, pa
 	return ret, nil
 }
 
-func readYamlClientIdAndSecret(root map[string]interface{}, username string) (string, string) {
+func parseKeycloakUrl(u string) (KeycloakUrl, error) {
+	ku := KeycloakUrl{}
+	uri, err := url.Parse(u)
+	if err != nil {
+		return ku, fmt.Errorf("cannot parse keycloak url: %s : %v", u, err)
+	}
+	ku.domain = uri.Host
+	_, err = fmt.Sscanf(uri.Path, "/auth/realms/%s", &ku.realm)
+	if err != nil {
+		return ku, fmt.Errorf("cannot parse keycloak url: %s : %v", uri.Path, err)
+	}
+	return ku, nil
+}
+
+func readUserConfig(root map[string]interface{}, username string) UserConfig {
+	uc := UserConfig{username: username}
 	c := readYamlConfig(root, username)
 	if c == nil {
-		return "", ""
+		return uc
 	}
 	usr, ok := c["user"]
 	if !ok {
-		return "", ""
+		return uc
 	}
 	auth, ok := usr.(map[string]interface{})["auth-provider"]
 	if !ok {
-		return "", ""
+		return uc
 	}
 	conf, ok := auth.(map[string]interface{})["config"]
 	if !ok {
-		return "", ""
+		return uc
 	}
 	data := conf.(map[string]interface{})
+	idpIssuerUrl, ok := data["idp-issuer-url"]
+	if ok {
+		uc.idpIssuerUrl = idpIssuerUrl.(string)
+	}
 	clientId, ok := data["client-id"]
-	if !ok {
-		clientId = ""
+	if ok {
+		uc.clientId = clientId.(string)
 	}
 	clientSecret, ok := data["client-secret"]
-	if !ok {
-		clientSecret = ""
+	if ok {
+		uc.clientSecret = clientSecret.(string)
 	}
-	return clientId.(string), clientSecret.(string)
+	return uc
 }
 
 func readYamlConfig(root map[string]interface{}, username string) map[string]interface{} {
@@ -187,6 +226,11 @@ func readYamlConfig(root map[string]interface{}, username string) map[string]int
 	return nil
 }
 
+func updateYamlConfig(root map[string]interface{}, uc UserConfig) {
+	conf := makeYamlConfig(uc)
+	replaceYamlConfig(root, uc.username, conf)
+}
+
 func replaceYamlConfig(root map[string]interface{}, username string, value map[string]interface{}) {
 	raw, ok := root["users"]
 	var users []interface{}
@@ -204,20 +248,20 @@ func replaceYamlConfig(root map[string]interface{}, username string, value map[s
 	root["users"] = append(users, value)
 }
 
-func makeYamlConfig(username string, clientId string, clientSecret string, idpIssuerUrl string, idToken string, refreshToken string) map[string]interface{} {
+func makeYamlConfig(uc UserConfig) map[string]interface{} {
 	conf := make(map[string]interface{})
-	conf["client-id"] = clientId
-	conf["client-secret"] = clientSecret
-	conf["idp-issuer-url"] = idpIssuerUrl
-	conf["id-token"] = idToken
-	conf["refresh-token"] = refreshToken
+	conf["client-id"] = uc.clientId
+	conf["client-secret"] = uc.clientSecret
+	conf["idp-issuer-url"] = uc.idpIssuerUrl
+	conf["id-token"] = uc.idToken
+	conf["refresh-token"] = uc.refreshToken
 	auth := make(map[string]interface{})
 	auth["name"] = "oidc"
 	auth["config"] = conf
 	usr := make(map[string]interface{})
 	usr["auth-provider"] = auth
 	root := make(map[string]interface{})
-	root["name"] = username
+	root["name"] = uc.username
 	root["user"] = usr
 	return root
 }
@@ -251,4 +295,18 @@ type CliOptions struct {
 type LoginResponse struct {
 	IdToken      string `json:"id_token"`
 	RefreshToken string `json:"refresh_token"`
+}
+
+type UserConfig struct {
+	username     string
+	idpIssuerUrl string
+	clientId     string
+	clientSecret string
+	idToken      string
+	refreshToken string
+}
+
+type KeycloakUrl struct {
+	domain string
+	realm  string
 }
