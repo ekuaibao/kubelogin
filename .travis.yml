@@ -1,16 +1,18 @@
+os: osx
 language: go
 go:
 - 1.11.x
+- 1.10.x
 before_install:
 - go get -v gopkg.in/yaml.v2
 script:
-- go build -o kubelogin
+- go build -o kubelogin-macos
 if: tag =~ ^\d+
 deploy:
   provider: releases
   api_key:
     secure: cyALUjgHHGCo5O7qoqmek7ECzt3F8H9VFPI4YnCjM3zL8BA85+bpL5vFO4rbr5GZHMm1uqWGZv8TzmYMde6ujTOz3yhzZMMA4SkvvBQ7f7Gwe1E2DKf+KegqCqko+7HtaM+bfvPKli0ylLQfIIgZkxZ4oeLua8PhcXiV0dq7cL9AUPxZdOVgXYI6t6rn/sLh9NsgQEyKxuEF8p9k0RQ7fFy7U3GlJD6YlaSABaVVyHfsKjSNeUZE4N48xZIgeA5PB5snfoOLtgMxOtjSrPAZ9fDs72SKY4awRhCZ7nrGKrrPAZE+sU0JGnJRCnkHDTxbO3mdwMQo09DfCcq+B2vNVDdWsj1U8S6hFDy8CoGSq65WcMRJBjxG2KNMPQV0/jnCTKHTkN46NuuGAprIc3QlhQi54O+taHF15slwIRv4Bv4Pu5IhbUPxwPEx2/i2ild+HzaZMZg25dgLuIrTWP9LnGo06GfWAV7X1DIoPmDeUDwsGFXMTV49qM31BklzzclCyy8ZVaLcZ9EjksllEKj39uP5iAjP+TB0Z0fj2EWJv5PZDlS2Mh2P2KPivUWRLlJYAaj/jsaUsXD2i5QYyzI4bJvmc2yCTVZreYnFrbx4YMyg0DEpGwVhSoXJOJWp9ZgH2zvnHHpUMmj6g1dojoylFlG46SaqcV0L5KwLNyOCcUc=
-  file: kubelogin
+  file: kubelogin-macos
   skip_cleanup: true
   on:
     repo: ekuaibao/kubelogin
