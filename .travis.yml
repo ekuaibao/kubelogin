@@ -4,7 +4,7 @@ go:
 before_install:
 - go get -v gopkg.in/yaml.v2
 script:
-- go build
+- go build -o kubelogin
 if: tag =~ ^\d+
 deploy:
   provider: releases
