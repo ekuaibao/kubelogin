@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-const version = "0.1.4"
+const version = "0.1.5"
 
 func main() {
 	log.Printf("kubelogin version: %s\n", version)
@@ -26,6 +26,7 @@ func main() {
 	}
 	opts := CliOptions{
 		config:       path.Join(usr.HomeDir, ".kube/config"),
+		key:          "",
 		domain:       "",
 		clientId:     "",
 		clientSecret: "",
@@ -33,6 +34,7 @@ func main() {
 		password:     "",
 	}
 	flag.StringVar(&opts.config, "config", opts.config, "location of kubeconfig file")
+	flag.StringVar(&opts.key, "key", opts.key, "key in kubeconfig file")
 	flag.StringVar(&opts.domain, "domain", opts.domain, "domain of keycloak server")
 	flag.StringVar(&opts.realm, "realm", opts.realm, "realm name")
 	flag.StringVar(&opts.clientId, "client-id", opts.clientId, "id of openid client")
@@ -40,6 +42,9 @@ func main() {
 	flag.StringVar(&opts.username, "username", opts.username, "username")
 	flag.StringVar(&opts.password, "password", opts.password, "password")
 	flag.Parse()
+	if opts.key == "" {
+		opts.key = opts.username
+	}
 	if opts.username == "" {
 		log.Fatalln("Parameter username is required")
 		return
@@ -62,7 +67,7 @@ func main() {
 	}
 	body = convert(body)
 	root := body.(map[string]interface{})
-	uc := readUserConfig(root, opts.username)
+	uc := readUserConfig(root, opts.key)
 	// merge options with original kubeconfig
 	ku, err := parseKeycloakUrl(uc.idpIssuerUrl)
 	if err != nil {
@@ -163,6 +168,9 @@ func login(uri string, clientId string, clientSecret string, username string, pa
 
 func parseKeycloakUrl(u string) (KeycloakUrl, error) {
 	ku := KeycloakUrl{}
+	if u == "" {
+		return ku, nil
+	}
 	uri, err := url.Parse(u)
 	if err != nil {
 		return ku, fmt.Errorf("cannot parse keycloak url: %s : %v", u, err)
@@ -284,6 +292,7 @@ func convert(i interface{}) interface{} {
 
 type CliOptions struct {
 	config       string
+	key          string
 	domain       string
 	realm        string
 	clientId     string
